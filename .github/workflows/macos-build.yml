@@ -203,13 +203,14 @@ jobs:
             done < <(otool -L "$f" | tail -n +2)
           done
 
-          # Compose add-binary args from staged dylibs
-          ADD_ARGS=""
+          # Persist staged binary pairs to a file to avoid quoting issues across steps
+          STAGED_BINS_FILE=./staged_bins.txt
+          : > "$STAGED_BINS_FILE"
           for item in "${STAGED_BINARIES[@]}"; do
-            ADD_ARGS+=" --add-binary \"$item\""
+            printf '%s\n' "$item" >> "$STAGED_BINS_FILE"
           done
-          echo "ADD_PYI_BINARIES=$ADD_ARGS" >> $GITHUB_ENV
-          echo "ADD_PYI_BINARIES=$ADD_ARGS"
+          echo "STAGED_BINS_FILE=$STAGED_BINS_FILE" >> $GITHUB_ENV
+          echo "Wrote $(wc -l < "$STAGED_BINS_FILE") binary mappings to $STAGED_BINS_FILE"
 
       - name: Upgrade pip tooling
         run: |
@@ -222,11 +223,18 @@ jobs:
 
       - name: Build single-file binary with PyInstaller
         run: |
-          pyinstaller --clean -F -n pdf2zh \
+          CMD='pyinstaller --clean -F -n pdf2zh \
             --add-data "pdf2zh_next/assets:pdf2zh_next/assets" \
-            --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next" \
-            $ADD_PYI_BINARIES \
-            pdf2zh_next/main.py
+            --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next"'
+          if [ -f "$STAGED_BINS_FILE" ]; then
+            while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              CMD+=" --add-binary \"$line\""
+            done < "$STAGED_BINS_FILE"
+          fi
+          CMD+=" pdf2zh_next/main.py"
+          echo "Running: $CMD"
+          eval "$CMD"
 
       - name: Smoke test binary
         run: |
