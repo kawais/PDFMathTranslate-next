@@ -43,6 +43,28 @@ jobs:
       - name: Determine arch
         run: echo "ARCH=$(uname -m)" >> $GITHUB_ENV
 
+      - name: Install freetype (Homebrew) and export path
+        shell: bash
+        run: |
+          brew update || true
+          brew install freetype || true
+          FTBREW_PREFIX=$(brew --prefix freetype)
+          echo "FREETYPE_PREFIX=${FTBREW_PREFIX}" >> $GITHUB_ENV
+          if [ -f "${FTBREW_PREFIX}/lib/libfreetype.6.dylib" ]; then
+            echo "FREETYPE_DYLIB=${FTBREW_PREFIX}/lib/libfreetype.6.dylib" >> $GITHUB_ENV
+          else
+            # Fallback for potential versioned names
+            CANDIDATE=$(ls -1 ${FTBREW_PREFIX}/lib/libfreetype*.dylib | head -n 1)
+            if [ -n "$CANDIDATE" ]; then
+              echo "FREETYPE_DYLIB=$CANDIDATE" >> $GITHUB_ENV
+            else
+              echo "Failed to locate libfreetype dylib under ${FTBREW_PREFIX}/lib" >&2
+              exit 1
+            fi
+          fi
+          echo "Using FREETYPE_DYLIB=$FREETYPE_DYLIB"
+          ls -l "$FREETYPE_DYLIB"
+
       - name: Upgrade pip tooling
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -57,6 +79,7 @@ jobs:
           pyinstaller --clean -F -n pdf2zh \
             --add-data "pdf2zh_next/assets:pdf2zh_next/assets" \
             --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next" \
+            --add-binary "$FREETYPE_DYLIB:cv2/.dylibs/libfreetype.6.dylib" \
             pdf2zh_next/main.py
 
       - name: Prepare package
