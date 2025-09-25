@@ -121,45 +121,8 @@ jobs:
           echo "Using FREETYPE_DYLIB=$FREETYPE_DYLIB"
           ls -l "$FREETYPE_DYLIB"
 
-          # Collect common freetype runtime deps
+          # Only bundle freetype to avoid conflicts with cv2 hook-collected libs
           ADD_BINARIES=("$FREETYPE_DYLIB:cv2/.dylibs/libfreetype.6.dylib")
-
-          add_lib() {
-            local prefix="$1"; shift
-            local pattern="$1"; shift
-            if [ -d "$prefix/lib" ]; then
-              local found
-              found=$(ls -1 $prefix/lib/$pattern 2>/dev/null | head -n 1 || true)
-              if [ -n "$found" ]; then
-                local base
-                base=$(basename "$found")
-                echo "Found $base at $found"
-                ADD_BINARIES+=("$found:cv2/.dylibs/$base")
-              fi
-            fi
-          }
-
-          # harfbuzz
-          if brew --prefix harfbuzz >/dev/null 2>&1; then
-            HB_PREFIX=$(brew --prefix harfbuzz)
-            add_lib "$HB_PREFIX" 'libharfbuzz*.dylib'
-          fi
-          # libpng
-          if brew --prefix libpng >/dev/null 2>&1; then
-            PNG_PREFIX=$(brew --prefix libpng)
-            add_lib "$PNG_PREFIX" 'libpng*.dylib'
-          fi
-          # brotli (decoder/common)
-          if brew --prefix brotli >/dev/null 2>&1; then
-            BR_PREFIX=$(brew --prefix brotli)
-            add_lib "$BR_PREFIX" 'libbrotlidec*.dylib'
-            add_lib "$BR_PREFIX" 'libbrotlicommon*.dylib'
-          fi
-          # graphite2
-          if brew --prefix graphite2 >/dev/null 2>&1; then
-            GRA_PREFIX=$(brew --prefix graphite2)
-            add_lib "$GRA_PREFIX" 'libgraphite2*.dylib'
-          fi
 
           # Export composed add-binary args
           # Stage dylibs and normalize their internal dependency paths to @loader_path
