@@ -43,11 +43,15 @@ jobs:
       - name: Determine arch
         run: echo "ARCH=$(uname -m)" >> $GITHUB_ENV
 
+      - name: Set macOS deployment target
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
+
       - name: Install freetype (Homebrew) and export path
         shell: bash
         run: |
           brew update || true
-          brew install freetype || true
+          brew install freetype harfbuzz libpng brotli graphite2 || true
           FTBREW_PREFIX=$(brew --prefix freetype)
           echo "FREETYPE_PREFIX=${FTBREW_PREFIX}" >> $GITHUB_ENV
           if [ -f "${FTBREW_PREFIX}/lib/libfreetype.6.dylib" ]; then
@@ -65,6 +69,96 @@ jobs:
           echo "Using FREETYPE_DYLIB=$FREETYPE_DYLIB"
           ls -l "$FREETYPE_DYLIB"
 
+          # Collect common freetype runtime deps
+          ADD_BINARIES=("$FREETYPE_DYLIB:cv2/.dylibs/libfreetype.6.dylib")
+
+          add_lib() {
+            local prefix="$1"; shift
+            local pattern="$1"; shift
+            if [ -d "$prefix/lib" ]; then
+              local found
+              found=$(ls -1 $prefix/lib/$pattern 2>/dev/null | head -n 1 || true)
+              if [ -n "$found" ]; then
+                local base
+                base=$(basename "$found")
+                echo "Found $base at $found"
+                ADD_BINARIES+=("$found:cv2/.dylibs/$base")
+              fi
+            fi
+          }
+
+          # harfbuzz
+          if brew --prefix harfbuzz >/dev/null 2>&1; then
+            HB_PREFIX=$(brew --prefix harfbuzz)
+            add_lib "$HB_PREFIX" 'libharfbuzz*.dylib'
+          fi
+          # libpng
+          if brew --prefix libpng >/dev/null 2>&1; then
+            PNG_PREFIX=$(brew --prefix libpng)
+            add_lib "$PNG_PREFIX" 'libpng*.dylib'
+          fi
+          # brotli (decoder/common)
+          if brew --prefix brotli >/dev/null 2>&1; then
+            BR_PREFIX=$(brew --prefix brotli)
+            add_lib "$BR_PREFIX" 'libbrotlidec*.dylib'
+            add_lib "$BR_PREFIX" 'libbrotlicommon*.dylib'
+          fi
+          # graphite2
+          if brew --prefix graphite2 >/dev/null 2>&1; then
+            GRA_PREFIX=$(brew --prefix graphite2)
+            add_lib "$GRA_PREFIX" 'libgraphite2*.dylib'
+          fi
+
+          # Export composed add-binary args
+          # Stage dylibs and normalize their internal dependency paths to @loader_path
+          STAGED_DIR=./macos_dylibs
+          mkdir -p "$STAGED_DIR"
+          DYLIB_NAMES=()
+          STAGED_BINARIES=()
+          for item in "${ADD_BINARIES[@]}"; do
+            # item format: src:dest
+            SRC_PATH="${item%%:*}"
+            BASENAME=$(basename "$SRC_PATH")
+            cp -f "$SRC_PATH" "$STAGED_DIR/$BASENAME"
+            DYLIB_NAMES+=("$BASENAME")
+            STAGED_BINARIES+=("$STAGED_DIR/$BASENAME:cv2/.dylibs/$BASENAME")
+          done
+
+          echo "Staged dylibs in $STAGED_DIR:" && ls -l "$STAGED_DIR" | cat
+
+          # Rewrite dependent paths inside staged dylibs
+          for f in "$STAGED_DIR"/*.dylib; do
+            [ -e "$f" ] || continue
+            echo "Rewriting dependencies for $f"
+            # Optional: set install name id (not required for non-shared re-export)
+            install_name_tool -id "@rpath/$(basename "$f")" "$f" || true
+            while IFS= read -r line; do
+              # otool -L lines look like: '\t/path/to/libfreetype.6.dylib (compatibility version 6.0.0, current version 6.0.0)'
+              dep=$(echo "$line" | awk '{print $1}')
+              case "$dep" in
+                /*|@rpath/*|@loader_path/*)
+                  base=$(basename "$dep")
+                  for n in "${DYLIB_NAMES[@]}"; do
+                    if [ "$base" = "$n" ]; then
+                      if [ "$dep" != "@loader_path/$base" ]; then
+                        echo "  change $dep -> @loader_path/$base"
+                        install_name_tool -change "$dep" "@loader_path/$base" "$f" || true
+                      fi
+                    fi
+                  done
+                  ;;
+              esac
+            done < <(otool -L "$f" | tail -n +2)
+          done
+
+          # Compose add-binary args from staged dylibs
+          ADD_ARGS=""
+          for item in "${STAGED_BINARIES[@]}"; do
+            ADD_ARGS+=" --add-binary \"$item\""
+          done
+          echo "ADD_PYI_BINARIES=$ADD_ARGS" >> $GITHUB_ENV
+          echo "ADD_PYI_BINARIES=$ADD_ARGS"
+
       - name: Upgrade pip tooling
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -79,8 +173,46 @@ jobs:
           pyinstaller --clean -F -n pdf2zh \
             --add-data "pdf2zh_next/assets:pdf2zh_next/assets" \
             --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next" \
-            --add-binary "$FREETYPE_DYLIB:cv2/.dylibs/libfreetype.6.dylib" \
+            $ADD_PYI_BINARIES \
             pdf2zh_next/main.py
+
+      - name: Smoke test binary
+        run: |
+          ./dist/pdf2zh --version | cat
+          ./dist/pdf2zh --help | head -n 50 | cat
+
+      - name: Test - Translate a PDF file with plain text only
+        run: |
+          ./dist/pdf2zh ./test/file/translate.cli.plain.text.pdf --output ./test/file
+
+      - name: Test - Translate a PDF file figure
+        run: |
+          ./dist/pdf2zh ./test/file/translate.cli.text.with.figure.pdf --output ./test/file
+
+      - name: Delete offline assets and cache (macOS)
+        shell: bash
+        run: |
+          echo "==== 删除离线资源包（如存在）===="
+          OFFLINE_ZIP=$(ls -1 ./dist/offline_assets_*.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$OFFLINE_ZIP" ]; then
+            echo "找到离线资源包: $OFFLINE_ZIP"
+            rm -f "$OFFLINE_ZIP"
+            echo "已删除离线资源包"
+          else
+            echo "未找到离线资源包"
+          fi
+          echo "==== 删除缓存目录 ~/.cache/babeldoc ===="
+          rm -rf "$HOME/.cache/babeldoc" || true
+
+      - name: Test - Translate without offline assets
+        run: |
+          ./dist/pdf2zh ./test/file/translate.cli.plain.text.pdf --output ./test/file
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-test-results-${{ env.ARCH }}
+          path: ./test/file/
 
       - name: Prepare package
         run: |
