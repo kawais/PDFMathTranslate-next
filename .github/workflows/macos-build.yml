@@ -1,0 +1,84 @@
+name: macOS Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-macos:
+    name: Build on ${{ matrix.runs_on }} (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs_on: [macos-13, macos-14]
+        python-version: ['3.12']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Show env
+        run: |
+          sw_vers
+          uname -a
+          python -V
+
+      - name: Determine arch
+        run: echo "ARCH=$(uname -m)" >> $GITHUB_ENV
+
+      - name: Upgrade pip tooling
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install project and build tool
+        run: |
+          python -m pip install .
+          python -m pip install pyinstaller
+
+      - name: Build single-file binary with PyInstaller
+        run: |
+          pyinstaller --clean -F -n pdf2zh \
+            --add-data "pdf2zh_next/assets:pdf2zh_next/assets" \
+            --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next" \
+            pdf2zh_next/main.py
+
+      - name: Prepare package
+        run: |
+          mkdir -p release
+          mkdir -p "release/pdf2zh-next-macos-${ARCH}"
+          cp dist/pdf2zh "release/pdf2zh-next-macos-${ARCH}/"
+          cp README.md LICENSE "release/pdf2zh-next-macos-${ARCH}/"
+          cd release
+          ZIP_NAME="pdf2zh-next-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-macos-${ARCH}.zip"
+          /usr/bin/zip -r "$ZIP_NAME" "pdf2zh-next-macos-${ARCH}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf2zh-next-macos-${{ env.ARCH }}
+          path: release/*.zip
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+
+
