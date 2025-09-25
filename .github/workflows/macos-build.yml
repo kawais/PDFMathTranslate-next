@@ -105,12 +105,14 @@ jobs:
           FTBREW_PREFIX=$("$BREW" --prefix freetype)
           echo "FREETYPE_PREFIX=${FTBREW_PREFIX}" >> $GITHUB_ENV
           if [ -f "${FTBREW_PREFIX}/lib/libfreetype.6.dylib" ]; then
-            echo "FREETYPE_DYLIB=${FTBREW_PREFIX}/lib/libfreetype.6.dylib" >> $GITHUB_ENV
+            FREETYPE_DYLIB="${FTBREW_PREFIX}/lib/libfreetype.6.dylib"
+            echo "FREETYPE_DYLIB=${FREETYPE_DYLIB}" >> $GITHUB_ENV
           else
             # Fallback for potential versioned names
             CANDIDATE=$(ls -1 ${FTBREW_PREFIX}/lib/libfreetype*.dylib 2>/dev/null | head -n 1 || true)
             if [ -n "$CANDIDATE" ]; then
-              echo "FREETYPE_DYLIB=$CANDIDATE" >> $GITHUB_ENV
+              FREETYPE_DYLIB="$CANDIDATE"
+              echo "FREETYPE_DYLIB=$FREETYPE_DYLIB" >> $GITHUB_ENV
             else
               echo "Failed to locate libfreetype dylib under ${FTBREW_PREFIX}/lib" >&2
               exit 1
