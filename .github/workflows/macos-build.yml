@@ -65,7 +65,8 @@ jobs:
           hiddenimports = collect_submodules('cv2')
 
           datas = []
-          datas += collect_data_files('cv2', include_py_files=False)
+          # 需要包含 cv2/config.py（OpenCV 在运行时以文件形式读取配置），因此包含 .py 数据文件
+          datas += collect_data_files('cv2', include_py_files=True)
 
           _bins = collect_dynamic_libs('cv2')
           binaries = []
