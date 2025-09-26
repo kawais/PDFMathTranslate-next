@@ -77,13 +77,13 @@ jobs:
               binaries.append((src, dest))
           PY
 
-          # runtime hook: filter interpreter-injected args for top-level run only
+          # runtime hook: filter interpreter/multiprocessing injected args with a safe loop (no 'continue' outside loop)
           cat > .tmp_hooks/runtime_filter_argv.py << 'RUNTIME'
           import sys
           import re
           import multiprocessing
 
-          # Handle multiprocessing child bootstrap early and exit if needed
+          # Ensure multiprocessing child bootstrap is handled
           try:
               multiprocessing.freeze_support()
           except Exception:
@@ -92,47 +92,38 @@ jobs:
           SINGLE_FLAGS = {'-B', '-S', '-I'}
           SINGLE_LONG_FLAGS = {'--multiprocessing-fork'}
           FLAGS_WITH_VALUE = {'-c', '-m'}
-          NOISE_RE_LIST = [
-              re.compile(r'^pipe_handle=\d+$'),
-              re.compile(r'^tracker_fd=\d+$'),
-              re.compile(r'^wakeup_fd=\d+$'),
-          ]
+          NOISE_PATTERNS = [r'^pipe_handle=\d+$', r'^tracker_fd=\d+$', r'^wakeup_fd=\d+$']
+          _NOISE_RES = [re.compile(p) for p in NOISE_PATTERNS]
 
-          def _filter_top_level(argv: list[str]) -> list[str]:
+          def _should_drop(arg: str) -> bool:
+              if arg.startswith('-psn_'):
+                  return True
+              if arg in SINGLE_FLAGS or arg in SINGLE_LONG_FLAGS:
+                  return True
+              if ('multiprocessing.' in arg and 'main(' in arg) or arg.startswith('from multiprocessing'):
+                  return True
+              for r in _NOISE_RES:
+                  if r.match(arg):
+                      return True
+              return False
+
+          def _filter_argv(argv: list[str]) -> list[str]:
               out: list[str] = []
               i = 0
-              while i < len(argv):
+              n = len(argv)
+              while i < n:
                   a = argv[i]
-                  # Drop macOS Finder psn arg
-                  if a.startswith('-psn_'):
-                      i += 1
-                      continue
-              # Drop noise args like pipe_handle=, tracker_fd=, wakeup_fd=
-              if any(p.match(a) for p in NOISE_RE_LIST):
-                  i += 1
-                  continue
-                  # Drop singleton flags
-                  if a in SINGLE_FLAGS:
-                      i += 1
-                      continue
-                  # Drop long single flags (mp bootstrap)
-                  if a in SINGLE_LONG_FLAGS:
-                      i += 1
-                      continue
-                  # Drop flags that take a following value (and consume it)
+                  # Remove flags that consume the following value
                   if a in FLAGS_WITH_VALUE:
                       i += 2
-                      continue
-                  # Defensive: drop obvious multiprocessing bootstrap code strings
-                  if ('multiprocessing.' in a and 'main(' in a) or a.startswith('from multiprocessing'):
+                  else:
+                      if not _should_drop(a):
+                          out.append(a)
                       i += 1
-                      continue
-                  out.append(a)
-                  i += 1
               return out
 
           try:
-              sys.argv = _filter_top_level(sys.argv)
+              sys.argv = _filter_argv(sys.argv)
           except Exception:
               # Never block startup due to filtering errors
               pass
