@@ -83,14 +83,11 @@ jobs:
           import re
 
           SINGLE_FLAGS = {'-B', '-S', '-I'}
+          SINGLE_LONG_FLAGS = {'--multiprocessing-fork'}
           FLAGS_WITH_VALUE = {'-c', '-m'}
           PIPE_HANDLE_RE = re.compile(r'^pipe_handle=\d+$')
 
           def _filter_top_level(argv: list[str]) -> list[str]:
-              # If this is a multiprocessing child process, DO NOT filter; let freeze_support handle it
-              if '--multiprocessing-fork' in argv:
-                  return argv
-
               out: list[str] = []
               i = 0
               while i < len(argv):
@@ -105,6 +102,10 @@ jobs:
                       continue
                   # Drop singleton flags
                   if a in SINGLE_FLAGS:
+                      i += 1
+                      continue
+                  # Drop long single flags (mp bootstrap)
+                  if a in SINGLE_LONG_FLAGS:
                       i += 1
                       continue
                   # Drop flags that take a following value (and consume it)
