@@ -170,3 +170,66 @@ jobs:
           files: release/*.zip
 
 
+  test-macos:
+    name: Test on ${{ matrix.runs_on }}
+    needs:
+      - build-macos
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs_on: [macos-13, macos-14]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show env
+        run: |
+          sw_vers
+          uname -a
+          python -V
+
+      - name: Determine arch
+        run: echo "ARCH=$(uname -m)" >> $GITHUB_ENV
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: pdf2zh-next-macos-${{ env.ARCH }}
+          path: ./release
+
+      - name: Unzip package
+        run: |
+          ls -lah ./release
+          ZIP_FILE=$(ls -1 ./release/*.zip | head -n 1)
+          echo "ZIP_FILE=$ZIP_FILE"
+          mkdir -p ./release/extracted
+          /usr/bin/unzip -o "$ZIP_FILE" -d ./release/extracted
+          ls -lah ./release/extracted
+
+      - name: Make binary executable
+        run: |
+          BIN_DIR=$(find ./release/extracted -type d -name "pdf2zh" | head -n 1)
+          echo "BIN_DIR=$BIN_DIR"
+          chmod +x "$BIN_DIR/pdf2zh"
+          echo "BIN_DIR=$BIN_DIR" >> $GITHUB_ENV
+
+      - name: Test show version
+        run: |
+          "$BIN_DIR/pdf2zh" --version
+
+      - name: Test - Translate a PDF file with plain text only
+        run: |
+          "$BIN_DIR/pdf2zh" ./test/file/translate.cli.plain.text.pdf --output ./test/file
+
+      - name: Test - Translate a PDF file figure
+        run: |
+          "$BIN_DIR/pdf2zh" ./test/file/translate.cli.text.with.figure.pdf --output ./test/file
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-test-results-${{ env.ARCH }}
+          path: ./test/file/
+
