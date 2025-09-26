@@ -81,11 +81,22 @@ jobs:
           cat > .tmp_hooks/runtime_filter_argv.py << 'RUNTIME'
           import sys
           import re
+          import multiprocessing
+
+          # Handle multiprocessing child bootstrap early and exit if needed
+          try:
+              multiprocessing.freeze_support()
+          except Exception:
+              pass
 
           SINGLE_FLAGS = {'-B', '-S', '-I'}
           SINGLE_LONG_FLAGS = {'--multiprocessing-fork'}
           FLAGS_WITH_VALUE = {'-c', '-m'}
-          PIPE_HANDLE_RE = re.compile(r'^pipe_handle=\d+$')
+          NOISE_RE_LIST = [
+              re.compile(r'^pipe_handle=\d+$'),
+              re.compile(r'^tracker_fd=\d+$'),
+              re.compile(r'^wakeup_fd=\d+$'),
+          ]
 
           def _filter_top_level(argv: list[str]) -> list[str]:
               out: list[str] = []
@@ -96,10 +107,10 @@ jobs:
                   if a.startswith('-psn_'):
                       i += 1
                       continue
-                  # Drop pipe_handle noise when present outside of mp-fork
-                  if PIPE_HANDLE_RE.match(a):
-                      i += 1
-                      continue
+              # Drop noise args like pipe_handle=, tracker_fd=, wakeup_fd=
+              if any(p.match(a) for p in NOISE_RE_LIST):
+                  i += 1
+                  continue
                   # Drop singleton flags
                   if a in SINGLE_FLAGS:
                       i += 1
