@@ -121,59 +121,12 @@ jobs:
           echo "Using FREETYPE_DYLIB=$FREETYPE_DYLIB"
           ls -l "$FREETYPE_DYLIB"
 
-          # Only bundle freetype to avoid conflicts with cv2 hook-collected libs
-          ADD_BINARIES=("$FREETYPE_DYLIB:cv2/.dylibs/libfreetype.6.dylib")
-
-          # Export composed add-binary args
-          # Stage dylibs and normalize their internal dependency paths to @loader_path
-          STAGED_DIR=./macos_dylibs
-          mkdir -p "$STAGED_DIR"
-          DYLIB_NAMES=()
-          STAGED_BINARIES=()
-          for item in "${ADD_BINARIES[@]}"; do
-            # item format: src:dest
-            SRC_PATH="${item%%:*}"
-            BASENAME=$(basename "$SRC_PATH")
-            cp -f "$SRC_PATH" "$STAGED_DIR/$BASENAME"
-            DYLIB_NAMES+=("$BASENAME")
-            STAGED_BINARIES+=("$STAGED_DIR/$BASENAME:cv2/.dylibs/$BASENAME")
-          done
-
-          echo "Staged dylibs in $STAGED_DIR:" && ls -l "$STAGED_DIR" | cat
-
-          # Rewrite dependent paths inside staged dylibs
-          for f in "$STAGED_DIR"/*.dylib; do
-            [ -e "$f" ] || continue
-            echo "Rewriting dependencies for $f"
-            # Optional: set install name id (not required for non-shared re-export)
-            install_name_tool -id "@rpath/$(basename "$f")" "$f" || true
-            while IFS= read -r line; do
-              # otool -L lines look like: '\t/path/to/libfreetype.6.dylib (compatibility version 6.0.0, current version 6.0.0)'
-              dep=$(echo "$line" | awk '{print $1}')
-              case "$dep" in
-                /*|@rpath/*|@loader_path/*)
-                  base=$(basename "$dep")
-                  for n in "${DYLIB_NAMES[@]}"; do
-                    if [ "$base" = "$n" ]; then
-                      if [ "$dep" != "@loader_path/$base" ]; then
-                        echo "  change $dep -> @loader_path/$base"
-                        install_name_tool -change "$dep" "@loader_path/$base" "$f" || true
-                      fi
-                    fi
-                  done
-                  ;;
-              esac
-            done < <(otool -L "$f" | tail -n +2)
-          done
-
-          # Persist staged binary pairs to a file to avoid quoting issues across steps
-          STAGED_BINS_FILE=./staged_bins.txt
-          : > "$STAGED_BINS_FILE"
-          for item in "${STAGED_BINARIES[@]}"; do
-            printf '%s\n' "$item" >> "$STAGED_BINS_FILE"
-          done
-          echo "STAGED_BINS_FILE=$STAGED_BINS_FILE" >> $GITHUB_ENV
-          echo "Wrote $(wc -l < "$STAGED_BINS_FILE") binary mappings to $STAGED_BINS_FILE"
+          # Replace OpenCV's bundled freetype so PyInstaller cv2 hook picks our version
+          CV2_DIR=$(python -c 'import cv2, os, sys; sys.stdout.write(os.path.dirname(cv2.__file__))')
+          echo "CV2_DIR=$CV2_DIR"
+          mkdir -p "$CV2_DIR/.dylibs"
+          cp -f "$FREETYPE_DYLIB" "$CV2_DIR/.dylibs/libfreetype.6.dylib"
+          install_name_tool -id "@rpath/libfreetype.6.dylib" "$CV2_DIR/.dylibs/libfreetype.6.dylib" || true
 
       - name: Upgrade pip tooling
         run: |
@@ -186,18 +139,10 @@ jobs:
 
       - name: Build single-file binary with PyInstaller
         run: |
-          CMD='pyinstaller --clean -F -n pdf2zh \
+          pyinstaller --clean -F -n pdf2zh \
             --add-data "pdf2zh_next/assets:pdf2zh_next/assets" \
-            --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next"'
-          if [ -f "$STAGED_BINS_FILE" ]; then
-            while IFS= read -r line; do
-              [ -n "$line" ] || continue
-              CMD+=" --add-binary \"$line\""
-            done < "$STAGED_BINS_FILE"
-          fi
-          CMD+=" pdf2zh_next/main.py"
-          echo "Running: $CMD"
-          eval "$CMD"
+            --add-data "pdf2zh_next/gui_translation.yaml:pdf2zh_next" \
+            pdf2zh_next/main.py
 
       - name: Smoke test binary
         run: |
