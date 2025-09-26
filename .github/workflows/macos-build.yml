@@ -77,32 +77,52 @@ jobs:
               binaries.append((src, dest))
           PY
 
-          # runtime hook: filter interpreter/multiprocessing injected args so argparse won't see them
+          # runtime hook: filter interpreter-injected args for top-level run only
           cat > .tmp_hooks/runtime_filter_argv.py << 'RUNTIME'
           import sys
+          import re
 
-          BLOCKED = {
-              '-B',
-              '-S',
-              '-I',
-              '-c',
-              '--multiprocessing-fork',
-          }
+          SINGLE_FLAGS = {'-B', '-S', '-I'}
+          FLAGS_WITH_VALUE = {'-c', '-m'}
+          PIPE_HANDLE_RE = re.compile(r'^pipe_handle=\d+$')
 
-          def _filter(argv):
-              out = []
-              for a in argv:
-                  if a in BLOCKED:
-                      continue
-                  # macOS Finder sometimes injects -psn_*; also ignore it
+          def _filter_top_level(argv: list[str]) -> list[str]:
+              # If this is a multiprocessing child process, DO NOT filter; let freeze_support handle it
+              if '--multiprocessing-fork' in argv:
+                  return argv
+
+              out: list[str] = []
+              i = 0
+              while i < len(argv):
+                  a = argv[i]
+                  # Drop macOS Finder psn arg
                   if a.startswith('-psn_'):
+                      i += 1
+                      continue
+                  # Drop pipe_handle noise when present outside of mp-fork
+                  if PIPE_HANDLE_RE.match(a):
+                      i += 1
+                      continue
+                  # Drop singleton flags
+                  if a in SINGLE_FLAGS:
+                      i += 1
+                      continue
+                  # Drop flags that take a following value (and consume it)
+                  if a in FLAGS_WITH_VALUE:
+                      i += 2
+                      continue
+                  # Defensive: drop obvious multiprocessing bootstrap code strings
+                  if ('multiprocessing.' in a and 'main(' in a) or a.startswith('from multiprocessing'):
+                      i += 1
                       continue
                   out.append(a)
+                  i += 1
               return out
 
           try:
-              sys.argv = _filter(sys.argv)
+              sys.argv = _filter_top_level(sys.argv)
           except Exception:
+              # Never block startup due to filtering errors
               pass
           RUNTIME
 
