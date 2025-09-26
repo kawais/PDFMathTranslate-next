@@ -77,6 +77,35 @@ jobs:
               binaries.append((src, dest))
           PY
 
+          # runtime hook: filter interpreter/multiprocessing injected args so argparse won't see them
+          cat > .tmp_hooks/runtime_filter_argv.py << 'RUNTIME'
+          import sys
+
+          BLOCKED = {
+              '-B',
+              '-S',
+              '-I',
+              '-c',
+              '--multiprocessing-fork',
+          }
+
+          def _filter(argv):
+              out = []
+              for a in argv:
+                  if a in BLOCKED:
+                      continue
+                  # macOS Finder sometimes injects -psn_*; also ignore it
+                  if a.startswith('-psn_'):
+                      continue
+                  out.append(a)
+              return out
+
+          try:
+              sys.argv = _filter(sys.argv)
+          except Exception:
+              pass
+          RUNTIME
+
           cat > pyinstaller.macos.spec << 'SPEC'
           # -*- mode: python ; coding: utf-8 -*-
 
@@ -111,7 +140,7 @@ jobs:
               datas=datas,
               hiddenimports=hiddenimports,
               hookspath=['.tmp_hooks'],
-              runtime_hooks=[],
+              runtime_hooks=['.tmp_hooks/runtime_filter_argv.py'],
               excludes=[],
               noarchive=False,
           )
